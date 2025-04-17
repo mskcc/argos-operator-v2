@@ -1,0 +1,12 @@
+{
+    "pipeline": {
+        "pipeline_link": "https://github.com/mskcc/argos-cwl",
+        "pipeline_version": "1.7.0",
+        "pipeline_entrypoint": "project-workflow-sv.cwl",
+        "pipeline_format": 0
+    },
+    "operator": {
+        "class_name": "ArgosOperatorV2",
+        "package_name": "argos_operator_v2"
+    }
+}
