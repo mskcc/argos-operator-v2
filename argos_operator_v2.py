@@ -5,7 +5,7 @@ import logging
 from datetime import datetime as dt
 from voyager_sdk.operator.operator import Operator
 from voyager_sdk.file_repository import FileRepository
-from voyager_sdk.protocols.cwl.processors.file_processor import FileProcessor
+from voyager_sdk.protocols.processors.file_processor import FileProcessor
 
 
 
