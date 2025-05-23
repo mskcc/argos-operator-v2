@@ -1,13 +1,12 @@
-import re
-import os
 import json
 import logging
+import os
+import re
 from datetime import datetime as dt
-from voyager_sdk.operator.operator import Operator
+
 from voyager_sdk.file_repository import FileRepository
+from voyager_sdk.operator.operator import Operator
 from voyager_sdk.protocols.processors.file_processor import FileProcessor
-
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,16 +35,17 @@ class ArgosOperatorV2(Operator):
     """Base operator class for the SDK"""
 
     def __init__(
-            self,
-            request_id=None,
-            runs=[],
-            pipeline=None,
-            pairing=None,
-            output_directory_prefix=None,
-            file_group=None,
-            job_group_id=None,
-            job_group_notifier_id=None,
-            **kwargs):
+        self,
+        request_id=None,
+        runs=[],
+        pipeline=None,
+        pairing=None,
+        output_directory_prefix=None,
+        file_group=None,
+        job_group_id=None,
+        job_group_notifier_id=None,
+        **kwargs,
+    ):
         """
         request_id: metadata key:igoRequestId
         runs: runs[]
@@ -57,8 +57,16 @@ class ArgosOperatorV2(Operator):
         },
         file_group: file_group_id
         """
-        super().__init__(request_id, runs, pipeline, pairing, output_directory_prefix, file_group, job_group_id,
-                         job_group_notifier_id)
+        super().__init__(
+            request_id,
+            runs,
+            pipeline,
+            pairing,
+            output_directory_prefix,
+            file_group,
+            job_group_id,
+            job_group_notifier_id,
+        )
 
     def get_samples_from_data(self, data):
         samples = list()
@@ -74,7 +82,11 @@ class ArgosOperatorV2(Operator):
             sample = igo_id_group[igo_id][0]
             sample_name = sample["metadata"]["cmoSampleName"]
             if "poolednormal" in sample_name.lower():
-                samples.append(self.build_sample(igo_id_group[igo_id], ignore_sample_formatting=True))
+                samples.append(
+                    self.build_sample(
+                        igo_id_group[igo_id], ignore_sample_formatting=True
+                    )
+                )
             else:
                 samples.append(self.build_sample(igo_id_group[igo_id]))
         return samples
@@ -98,7 +110,9 @@ class ArgosOperatorV2(Operator):
         data = self.build_data_list(files)
 
         samples = self.get_samples_from_data(data)
-        argos_inputs, error_samples = self.construct_argos_jobs(samples, logger=self.logger)
+        argos_inputs, error_samples = self.construct_argos_jobs(
+            samples, logger=self.logger
+        )
         sample_pairing = self.get_pairing_from_argos_inputs(argos_inputs)
         sample_mapping, filepaths = self.get_mapping_from_argos_inputs(argos_inputs)
         argos_jobs = self.get_argos_jobs(argos_inputs)
@@ -120,14 +134,19 @@ class ArgosOperatorV2(Operator):
             patient_id = sample["patient_id"]
             if sample_name == "sampleNameMalformed":
                 add = False
-                LOGGER.info("Sample name is malformed for for %s; removing from set", sample_id)
+                LOGGER.info(
+                    "Sample name is malformed for for %s; removing from set", sample_id
+                )
             if not patient_id:
                 add = False
                 LOGGER.info("No patient ID for sample %s; removing from set", sample_id)
             elif isinstance(patient_id, str):
                 if not patient_id.strip():
                     add = False
-                    LOGGER.info("Empty string for patient ID in sample %s; removing from set", sample_id)
+                    LOGGER.info(
+                        "Empty string for patient ID in sample %s; removing from set",
+                        sample_id,
+                    )
             if add:
                 data.append(sample)
             else:
@@ -136,7 +155,7 @@ class ArgosOperatorV2(Operator):
 
     def construct_argos_jobs(self, samples, logger=None):
         samples, error_samples = self.remove_with_caveats(samples)
-        pairs = compile_pairs(samples)
+        pairs = self.compile_pairs(samples)
         number_of_tumors = len(pairs["tumor"])
         argos_jobs = list()
         for i in range(0, number_of_tumors):
@@ -148,7 +167,9 @@ class ArgosOperatorV2(Operator):
             pi = tumor["pi"]
             pi_email = tumor["pi_email"]
             job = dict()
-            tumor_specimen_type = normalize_igo_text_field(pairs["tumor"][i]["specimen_type"])
+            tumor_specimen_type = normalize_igo_text_field(
+                pairs["tumor"][i]["specimen_type"]
+            )
             normal_sample = format_sample(normal, tumor_specimen_type)
             tumor_sample = format_sample(tumor, tumor_specimen_type)
             job["tumor"] = tumor_sample
@@ -163,9 +184,7 @@ class ArgosOperatorV2(Operator):
         return argos_jobs, error_samples
 
     def get_files(self, request_id):
-        files = FileRepository.filter(
-            metadata=[f"igoRequestId:{request_id}"]
-        )
+        files = FileRepository.filter(metadata=[f"igoRequestId:{request_id}"])
         # cnt_tumors = FileRepository.filter(
         #     metadata=[
         #         f"igoRequestId:{request_id}"
@@ -224,7 +243,9 @@ class ArgosOperatorV2(Operator):
             except:
                 LOGGER.info("RG ID couldn't be set.")
                 LOGGER.info("Sample ID %s; patient ID %s", sample_id, cmo_patient_id)
-                LOGGER.info("SampleName %s; platform unit %s", cmo_sample_name, platform_unit)
+                LOGGER.info(
+                    "SampleName %s; platform unit %s", cmo_sample_name, platform_unit
+                )
             if sample_id not in samples:
                 samples[sample_id] = dict()
                 sample = dict()
@@ -338,7 +359,11 @@ class ArgosOperatorV2(Operator):
                 tags["output_directory_prefix"] = self.output_directory_prefix
             argos_jobs.append(
                 dict(
-                    app=self._pipeline, inputs=job, name=name, tags=tags, log_prefix=log_prefix
+                    app=self._pipeline,
+                    inputs=job,
+                    name=name,
+                    tags=tags,
+                    log_prefix=log_prefix,
                 )
             )
         return argos_jobs
@@ -497,6 +522,114 @@ class ArgosOperatorV2(Operator):
                     filepaths.append(filepath)
         return sample_mapping, filepaths
 
+    def get_samples_from_patient_id(self, patient_id):
+        """
+        Retrieves samples from the database based on the patient_id
+
+        Only retrieve patients from LIMS file group
+        """
+        patient_files = FileRepository.filter(
+            file_group=os.environ.get("FILE_GROUP"),
+            metadata=[f"cmoPatientId:{patient_id}"],
+        )
+        data = list()
+        for current_file in patient_files:
+            sample = dict()
+            sample["id"] = current_file.file_id
+            sample["path"] = current_file.path
+            sample["file_name"] = current_file.file_name
+            sample["metadata"] = current_file.metadata
+            data.append(sample)
+
+        samples = list()
+        # group by igoId
+        igo_id_group = dict()
+        for sample in data:
+            igo_id = sample["metadata"]["primaryId"]
+            if igo_id not in igo_id_group:
+                igo_id_group[igo_id] = list()
+            igo_id_group[igo_id].append(sample)
+
+        for igo_id in igo_id_group:
+            samples.append(self.build_sample(igo_id_group[igo_id]))
+        samples, bad_samples = self.remove_with_caveats(samples)
+        number_of_bad_samples = len(bad_samples)
+        if number_of_bad_samples > 0:
+            LOGGER.warning(
+                "Some samples for patient query %s have invalid %i values",
+                patient_id,
+                number_of_bad_samples,
+            )
+        return samples
+
+    def compile_pairs(self, samples):
+        """
+        Creates pairs of tumors and normals from a list of samples
+        """
+        tumors = get_by_tumor_type(samples, "Tumor")
+        normals = get_by_tumor_type(samples, "Normal")
+
+        # pairing
+        pairs = dict()
+        pairs["tumor"] = list()
+        pairs["normal"] = list()
+
+        num_tumors = len(tumors)
+        if num_tumors == 0:
+            LOGGER.error("No tumor samples found; pairing will not be performed.")
+            LOGGER.error("Returning an empty list of pairs.")
+
+        for tumor in tumors:
+            LOGGER.info("Pairing tumor sample %s", tumor["sample_id"])
+            patient_id = tumor["patient_id"]
+            if patient_id:
+                run_mode = get_run_mode(tumor["run_mode"])
+                bait_set = tumor["bait_set"]
+                run_ids = tumor["run_id"]
+                preservation_types = tumor["preservation_type"]
+                normal = get_viable_normal(normals, patient_id, run_mode, bait_set)
+                if normal:
+                    LOGGER.info(
+                        "Pairing %s (%s) with %s (%s)",
+                        tumor["sample_id"],
+                        tumor["SM"],
+                        normal["sample_id"],
+                        normal["SM"],
+                    )
+                    pairs["tumor"].append(tumor)
+                    pairs["normal"].append(normal)
+                else:
+                    LOGGER.info(
+                        "Missing normal for sample %s (%s); querying patient %s",
+                        tumor["sample_id"],
+                        tumor["SM"],
+                        patient_id,
+                    )
+                    patient_samples = self.get_samples_from_patient_id(patient_id)
+                    new_normals = get_by_tumor_type(patient_samples, "Normal")
+                    new_normal = get_viable_normal(
+                        new_normals, patient_id, run_mode, bait_set
+                    )
+                    if new_normal:
+                        LOGGER.info(
+                            "Pairing %s (%s) with %s (%s)",
+                            tumor["sample_id"],
+                            tumor["SM"],
+                            new_normal["sample_id"],
+                            new_normal["SM"],
+                        )
+                        pairs["tumor"].append(tumor)
+                        pairs["normal"].append(new_normal)
+                    else:
+                        LOGGER.error(
+                            "No normal found for %s (%s), patient %s",
+                            tumor["sample_id"],
+                            tumor["SM"],
+                            patient_id,
+                        )
+        return pairs
+
+
 class Fastqs:
     """
     Fastqs class to hold pairs of fastqs
@@ -641,13 +774,16 @@ def format_sample_name(sample_name, specimen_type, ignore_sample_formatting=Fals
             if "s_" in sample_name[:2]:
                 return sample_name
             elif (
-                bool(sample_pattern.match(sample_name)) or "cellline" in specimen_type.lower()
+                bool(sample_pattern.match(sample_name))
+                or "cellline" in specimen_type.lower()
             ):  # cmoSampleName is formatted properly
                 sample_name = "s_" + sample_name.replace("-", "_")
                 return sample_name
             return sample_name
         except TypeError:
-            LOGGER.error("sampleNameError: sampleName is Nonetype; returning 'sampleNameMalformed'.")
+            LOGGER.error(
+                "sampleNameError: sampleName is Nonetype; returning 'sampleNameMalformed'."
+            )
             return "sampleNameMalformed"
     else:
         return sample_name
@@ -682,52 +818,6 @@ def get_r_orientation(fastq_filename):
     return "ERROR"
 
 
-def compile_pairs(samples):
-    """
-    Creates pairs of tumors and normals from a list of samples
-    """
-    tumors = get_by_tumor_type(samples, "Tumor")
-    normals = get_by_tumor_type(samples, "Normal")
-
-    # pairing
-    pairs = dict()
-    pairs["tumor"] = list()
-    pairs["normal"] = list()
-
-    num_tumors = len(tumors)
-    if num_tumors == 0:
-        LOGGER.error("No tumor samples found; pairing will not be performed.")
-        LOGGER.error("Returning an empty list of pairs.")
-
-    for tumor in tumors:
-        LOGGER.info("Pairing tumor sample %s", tumor["sample_id"])
-        patient_id = tumor["patient_id"]
-        if patient_id:
-            run_mode = get_run_mode(tumor["run_mode"])
-            bait_set = tumor["bait_set"]
-            run_ids = tumor["run_id"]
-            preservation_types = tumor["preservation_type"]
-            normal = get_viable_normal(normals, patient_id, run_mode, bait_set)
-            if normal:
-                LOGGER.info(
-                        "Pairing %s (%s) with %s (%s)",
-                        tumor["sample_id"],
-                        tumor["SM"],
-                        normal["sample_id"],
-                        normal["SM"],
-                )
-                pairs["tumor"].append(tumor)
-                pairs["normal"].append(normal)
-            else:
-                LOGGER.error(
-                    "No normal found for %s (%s), patient %s",
-                    tumor["sample_id"],
-                    tumor["SM"],
-                    patient_id,
-                )
-    return pairs
-
-
 def get_by_tumor_type(data, tumor_type):
     """
     Retrieves a set of samples that contain a value tumor_type
@@ -751,7 +841,11 @@ def get_viable_normal(normals, patient_id, run_mode, bait_set):
     viable_normal = dict()
     for normal in normals:
         normal_run_mode = get_run_mode(normal["run_mode"])
-        if normal["patient_id"] == patient_id and normal["bait_set"] == bait_set and normal_run_mode == run_mode:
+        if (
+            normal["patient_id"] == patient_id
+            and normal["bait_set"] == bait_set
+            and normal_run_mode == run_mode
+        ):
             if viable_normal:
                 try:
                     viable_normal = compare_dates(normal, viable_normal, "%y-%m-%d")
@@ -820,7 +914,9 @@ def format_sample(data, specimen_type):
     sample["bam"] = list()
     sample["zBam"] = list()
     sample["RG_ID"] = data["ID"]
-    sample["adapter"] = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCACATGAGCATCTCGTATGCCGTCTTCTGCTTG"
+    sample["adapter"] = (
+        "AGATCGGAAGAGCACACGTCTGAACTCCAGTCACATGAGCATCTCGTATGCCGTCTTCTGCTTG"
+    )
     sample["adapter2"] = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT"
     sample["bwa_output"] = sample["ID"] + ".bam"
     sample["request_id"] = data["request_id"]
@@ -854,7 +950,12 @@ def convert_references(project_id, assay, pi, pi_email):
     request_files = genomic_resources["request_files"]
     intervals = get_baits_and_targets(assay, genomic_resources)
     curated_bams = get_curated_bams(assay, request_files)
-    covariates = ["CycleCovariate", "ContextCovariate", "ReadGroupCovariate", "QualityScoreCovariate"]
+    covariates = [
+        "CycleCovariate",
+        "ContextCovariate",
+        "ReadGroupCovariate",
+        "QualityScoreCovariate",
+    ]
     rf = ["BadCigar"]
     genome = "GRCh37"
     delly_type = ["DUP", "DEL", "INV", "INS", "BND"]
@@ -871,10 +972,19 @@ def convert_references(project_id, assay, pi, pi_email):
         "refseq": {"class": "File", "location": str(request_files["refseq"])},
         "vep_data": str(request_files["vep_data"]),
         "hotspot_list": str(request_files["hotspot_list"]),
-        "hotspot_list_maf": {"class": "File", "location": str(request_files["hotspot_list_maf"])},
-        "delly_exclude": {"class": "File", "location": str(genomic_resources["genomes"][genome]["delly"])},
+        "hotspot_list_maf": {
+            "class": "File",
+            "location": str(request_files["hotspot_list_maf"]),
+        },
+        "delly_exclude": {
+            "class": "File",
+            "location": str(genomic_resources["genomes"][genome]["delly"]),
+        },
         "hotspot_vcf": str(request_files["hotspot_vcf"]),
-        "facets_snps": {"class": "File", "location": str(genomic_resources["genomes"][genome]["facets_snps"])},
+        "facets_snps": {
+            "class": "File",
+            "location": str(genomic_resources["genomes"][genome]["facets_snps"]),
+        },
         "custom_enst": str(request_files["custom_enst"]),
         "vep_path": str(request_files["vep_path"]),
         "conpair_markers": str(request_files["conpair_markers"]),
@@ -887,7 +997,10 @@ def convert_references(project_id, assay, pi, pi_email):
         "curated_bams": curated_bams,
         "hapmap": {"class": "File", "location": str(request_files["hapmap"])},
         "dbsnp": {"class": "File", "location": str(request_files["dbsnp"])},
-        "indels_1000g": {"class": "File", "location": str(request_files["indels_1000g"])},
+        "indels_1000g": {
+            "class": "File",
+            "location": str(request_files["indels_1000g"]),
+        },
         "snps_1000g": {"class": "File", "location": str(request_files["snps_1000g"])},
         "cosmic": {"class": "File", "location": str(request_files["cosmic"])},
         "exac_filter": {"class": "File", "location": str(request_files["exac_filter"])},
@@ -927,7 +1040,9 @@ def convert_references(project_id, assay, pi, pi_email):
 
 def load_references():
     WORKDIR = os.path.dirname(os.path.abspath(__file__))
-    d = json.load(open(os.path.join(WORKDIR, "reference_jsons/genomic_resources.json"), "rb"))
+    d = json.load(
+        open(os.path.join(WORKDIR, "reference_jsons/genomic_resources.json"), "rb")
+    )
     return d
 
 
@@ -960,13 +1075,27 @@ def get_baits_and_targets(assay, genomic_resources):
 
     if target_assay in targets:
         return {
-            "bait_intervals": {"class": "File", "location": str(targets[target_assay]["baits_list"])},
-            "target_intervals": {"class": "File", "location": str(targets[target_assay]["targets_list"])},
-            "fp_intervals": {"class": "File", "location": str(targets[target_assay]["FP_intervals"])},
-            "fp_genotypes": {"class": "File", "location": str(targets[target_assay]["FP_genotypes"])},
+            "bait_intervals": {
+                "class": "File",
+                "location": str(targets[target_assay]["baits_list"]),
+            },
+            "target_intervals": {
+                "class": "File",
+                "location": str(targets[target_assay]["targets_list"]),
+            },
+            "fp_intervals": {
+                "class": "File",
+                "location": str(targets[target_assay]["FP_intervals"]),
+            },
+            "fp_genotypes": {
+                "class": "File",
+                "location": str(targets[target_assay]["FP_genotypes"]),
+            },
         }
     else:
-        LOGGER.error("ERROR: Targets for Assay not found in genomic_resources.json: %s", assay)
+        LOGGER.error(
+            "ERROR: Targets for Assay not found in genomic_resources.json: %s", assay
+        )
 
 
 def get_facets_cval(assay):
