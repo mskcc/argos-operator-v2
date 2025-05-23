@@ -9,6 +9,10 @@ from voyager_sdk.operator.operator import Operator
 from voyager_sdk.protocols.processors.file_processor import FileProcessor
 
 LOGGER = logging.getLogger(__name__)
+TUMOR_SAMPLE = os.environ.get("TUMOR_SAMPLE_ID")
+NORMAL_SAMPLE = os.environ.get("NORMAL_SAMPLE")
+FILE_GROUP = os.environ.get("FILE_GROUP")
+BED_FILE = os.environ.get("BED_FILE")
 
 
 PDX_SPECIMEN_TYPES = ["pdx", "xenograft", "xenograftderivedcellline"]
@@ -105,9 +109,14 @@ class ArgosOperatorV2(Operator):
     def get_jobs(self):
         argos_jobs = list()
         dmp_samples = list()
-        files = self.get_files(self.request_id)
+        files = list()
 
-        data = self.build_data_list(files)
+        tumor_sample = self.get_files_citag(TUMOR_SAMPLE)
+        normal_sample = self.get_files_citag(NORMAL_SAMPLE)
+
+        tumor_data = self.build_data_list(tumor_sample)
+        normal_data = self.build_data_list(normal_sample)
+        data = tumor_data + normal_data
 
         samples = self.get_samples_from_data(data)
         argos_inputs, error_samples = self.construct_argos_jobs(
@@ -182,6 +191,10 @@ class ArgosOperatorV2(Operator):
             job.update(references)
             argos_jobs.append(job)
         return argos_jobs, error_samples
+
+    def get_files_citag(self, citag):
+        files = FileRepository.filter(metadata=[f"ciTag:{citag}"])
+        return files
 
     def get_files(self, request_id):
         files = FileRepository.filter(metadata=[f"igoRequestId:{request_id}"])
@@ -529,7 +542,7 @@ class ArgosOperatorV2(Operator):
         Only retrieve patients from LIMS file group
         """
         patient_files = FileRepository.filter(
-            file_group=os.environ.get("FILE_GROUP"),
+            file_group=FILE_GROUP,
             metadata=[f"cmoPatientId:{patient_id}"],
         )
         data = list()
@@ -580,6 +593,8 @@ class ArgosOperatorV2(Operator):
             LOGGER.error("Returning an empty list of pairs.")
 
         for tumor in tumors:
+            if TUMOR_SAMPLE != tumor["SM"]:
+                continue
             LOGGER.info("Pairing tumor sample %s", tumor["sample_id"])
             patient_id = tumor["patient_id"]
             if patient_id:
@@ -802,19 +817,27 @@ def get_r_orientation(fastq_filename):
     """
     Retrieve R orientation of fastq filename
     """
+    print(f"{fastq_filename}: getting R orientation")
     reversed_filename = "".join(reversed(fastq_filename))
     r1_idx = reversed_filename.find("1R")
     r2_idx = reversed_filename.find("2R")
     if r1_idx == -1 and r2_idx == -1:
+        print(f"{fastq_filename}: no R orientation found")
         return "ERROR"
     elif r1_idx > 0 and r2_idx == -1:
+        print(f"{fastq_filename}: Setting R1")
         return "R1"
     elif r2_idx > 0 and r1_idx == -1:
+        print(f"{fastq_filename}: Setting R2")
+        print("Setting R2")
         return "R2"
     elif r1_idx > 0 and r2_idx > 0:
         if r1_idx < r2_idx:
+            print(f"{fastq_filename}: Setting R1")
             return "R1"
+        print(f"{fastq_filename}: Setting R2")
         return "R2"
+    print(f"{fastq_filename}: no R orientation found")
     return "ERROR"
 
 
@@ -994,6 +1017,7 @@ def convert_references(project_id, assay, pi, pi_email):
     files.update(intervals)
 
     out_dict = {
+        "bedfile": {"class": "File", "location": BED_FILE},
         "curated_bams": curated_bams,
         "hapmap": {"class": "File", "location": str(request_files["hapmap"])},
         "dbsnp": {"class": "File", "location": str(request_files["dbsnp"])},
