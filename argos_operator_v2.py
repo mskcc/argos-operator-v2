@@ -817,7 +817,6 @@ def get_r_orientation(fastq_filename):
     """
     Retrieve R orientation of fastq filename
     """
-    print(f"{fastq_filename}: getting R orientation")
     reversed_filename = "".join(reversed(fastq_filename))
     r1_idx = reversed_filename.find("1R")
     r2_idx = reversed_filename.find("2R")
