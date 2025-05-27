@@ -10,7 +10,7 @@ from voyager_sdk.protocols.processors.file_processor import FileProcessor
 
 LOGGER = logging.getLogger(__name__)
 TUMOR_SAMPLE = os.environ.get("TUMOR_SAMPLE_ID")
-NORMAL_SAMPLE = os.environ.get("NORMAL_SAMPLE")
+NORMAL_SAMPLE = os.environ.get("NORMAL_SAMPLE_ID")
 FILE_GROUP = os.environ.get("FILE_GROUP")
 BED_FILE = os.environ.get("BED_FILE")
 
@@ -92,14 +92,7 @@ class ArgosOperatorV2(Operator):
         for igo_id in igo_id_group:
             sample = igo_id_group[igo_id][0]
             sample_name = sample["metadata"]["cmoSampleName"]
-            if "poolednormal" in sample_name.lower():
-                samples.append(
-                    self.build_sample(
-                        igo_id_group[igo_id], ignore_sample_formatting=True
-                    )
-                )
-            else:
-                samples.append(self.build_sample(igo_id_group[igo_id]))
+            samples.append(self.build_sample(igo_id_group[igo_id]))
         return samples
 
     def build_data_list(self, files):
@@ -119,13 +112,17 @@ class ArgosOperatorV2(Operator):
         files = list()
 
         tumor_sample = self.get_files_citag(TUMOR_SAMPLE)
-        normal_sample = self.get_files_citag(NORMAL_SAMPLE)
 
         tumor_data = self.build_data_list(tumor_sample)
-        normal_data = self.build_data_list(normal_sample)
-        data = tumor_data + normal_data
+        data = tumor_data
+        if NORMAL_SAMPLE:
+            normal_sample = self.get_files_citag(NORMAL_SAMPLE)
+            normal_data = self.build_data_list(normal_sample)
+            data = tumor_data + normal_data
 
         samples = self.get_samples_from_data(data)
+        from pprint import pprint
+
         argos_inputs, error_samples = self.construct_argos_jobs(
             samples, logger=self.logger
         )
@@ -172,6 +169,9 @@ class ArgosOperatorV2(Operator):
     def construct_argos_jobs(self, samples, logger=None):
         samples, error_samples = self.remove_with_caveats(samples)
         pairs = self.compile_pairs(samples)
+        from pprint import pprint
+
+        pprint(pairs)
         number_of_tumors = len(pairs["tumor"])
         argos_jobs = list()
         for i in range(0, number_of_tumors):
@@ -676,6 +676,7 @@ class ArgosOperatorV2(Operator):
             preservation = "ffpe"
 
         for machine in machines:
+            print(f"Retrieving {machine}, {baits}, {preservation}")
             pooled_normal_objs = [
                 item
                 for item in POOLED_NORMALS
