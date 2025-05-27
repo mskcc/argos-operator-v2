@@ -14,6 +14,13 @@ NORMAL_SAMPLE = os.environ.get("NORMAL_SAMPLE")
 FILE_GROUP = os.environ.get("FILE_GROUP")
 BED_FILE = os.environ.get("BED_FILE")
 
+WORKDIR = os.path.dirname(os.path.abspath(__file__))
+GENOMIC_RESOURCES = json.load(
+    open(os.path.join(WORKDIR, "reference_jsons/genomic_resources.json"), "rb")
+)
+POOLED_NORMALS = json.load(
+    open(os.path.join(WORKDIR, "reference_jsons/pooled_normals.json"), "rb")
+)
 
 PDX_SPECIMEN_TYPES = ["pdx", "xenograft", "xenograftderivedcellline"]
 NON_PDX_SPECIMEN_TYPES = [
@@ -620,29 +627,101 @@ class ArgosOperatorV2(Operator):
                         tumor["SM"],
                         patient_id,
                     )
-                    patient_samples = self.get_samples_from_patient_id(patient_id)
-                    new_normals = get_by_tumor_type(patient_samples, "Normal")
-                    new_normal = get_viable_normal(
-                        new_normals, patient_id, run_mode, bait_set
+                    new_normal = self.get_normal_from_patient(
+                        tumor, patient_id, run_mode, bait_set
                     )
                     if new_normal:
-                        LOGGER.info(
-                            "Pairing %s (%s) with %s (%s)",
-                            tumor["sample_id"],
-                            tumor["SM"],
-                            new_normal["sample_id"],
-                            new_normal["SM"],
-                        )
                         pairs["tumor"].append(tumor)
                         pairs["normal"].append(new_normal)
                     else:
-                        LOGGER.error(
-                            "No normal found for %s (%s), patient %s",
-                            tumor["sample_id"],
-                            tumor["SM"],
-                            patient_id,
+                        LOGGER.info(
+                            f"No normal outside request for {tumor['sample_id']}; finding Pooled Normal..."
                         )
+                        pooled_normal = self.get_pooled_normal(
+                            run_ids, bait_set, preservation_types
+                        )
+                        if pooled_normal:
+                            pairs["tumor"].append(tumor)
+                            pairs["normal"].append(pooled_normal)
+                        else:
+                            LOGGER.error(
+                                "No normal found for %s (%s), patient %s",
+                                tumor["sample_id"],
+                                tumor["SM"],
+                                patient_id,
+                            )
         return pairs
+
+    def get_normal_from_patient(self, tumor, patient_id, run_mode, bait_set):
+        patient_samples = self.get_samples_from_patient_id(patient_id)
+        new_normals = get_by_tumor_type(patient_samples, "Normal")
+        new_normal = get_viable_normal(new_normals, patient_id, run_mode, bait_set)
+        if new_normal:
+            LOGGER.info(
+                "Pairing %s (%s) with %s (%s)",
+                tumor["sample_id"],
+                tumor["SM"],
+                new_normal["sample_id"],
+                new_normal["SM"],
+            )
+
+    def get_pooled_normal(self, run_ids, bait_set, preservation_types):
+        machines = [i.split("_")[0].lower() for i in run_ids]
+        preservations_lc = set([x.lower() for x in preservation_types])
+        baits = bait_set.lower()
+        preservation = "frozen"
+        earliest_pooled_normal = None
+        pooled_normals_w_meta = list()
+        if "ffpe" in preservations_lc:
+            preservation = "ffpe"
+
+        for machine in machines:
+            pooled_normal_objs = [
+                item
+                for item in POOLED_NORMALS
+                if item.get("machine") == machine
+                and item.get("preservation_type") == preservation
+                and item.get("bait_set") == baits
+            ]
+
+            if not pooled_normal_objs:
+                continue
+            if not earliest_pooled_normal:
+                earliest_pooled_normal = pooled_normal_objs[0]
+            else:
+                pooled_normal = pooled_normal_objs[0]
+                if not earliest_pooled_normal:
+                    earliest_pooled_normal = pooled_normal
+                else:
+                    # tiebreaker - if there's more than one set of pooled normals fetched, return earliest one
+                    old_date = earliest_pooled_normal["run_date"]
+                    curr_date = pooled_normal["run_date"]
+                    if curr_date < old_date:
+                        earliest_pooled_normal = pooled_normal
+
+        if earliest_pooled_normal:
+            sample_name = "_".join(
+                [
+                    earliest_pooled_normal["bait_set"],
+                    earliest_pooled_normal["preservation_type"],
+                    earliest_pooled_normal["machine"],
+                    "POOLEDNORMAL",
+                ]
+            )
+            sample_name = sample_name.upper()
+
+            for pn in earliest_pooled_normal["pooled_normals_paths"]:
+                pooled_normal = {
+                    "id": sample_name,
+                    "path": pn,
+                    "file_name": os.path.basename(pn),
+                }
+                pn_file = build_pooled_normal_sample_by_file(
+                    pooled_normal, run_ids, preservation_types, bait_set, sample_name
+                )
+                pooled_normals_w_meta.append(pn_file)
+        pooled_normal_result = self.build_sample(pooled_normals_w_meta)
+        return pooled_normal_result
 
 
 class Fastqs:
@@ -968,9 +1047,8 @@ def format_sample(data, specimen_type):
 
 
 def convert_references(project_id, assay, pi, pi_email):
-    genomic_resources = load_references()
-    request_files = genomic_resources["request_files"]
-    intervals = get_baits_and_targets(assay, genomic_resources)
+    request_files = GENOMIC_RESOURCES["request_files"]
+    intervals = get_baits_and_targets(assay)
     curated_bams = get_curated_bams(assay, request_files)
     covariates = [
         "CycleCovariate",
@@ -1000,12 +1078,12 @@ def convert_references(project_id, assay, pi, pi_email):
         },
         "delly_exclude": {
             "class": "File",
-            "location": str(genomic_resources["genomes"][genome]["delly"]),
+            "location": str(GENOMIC_RESOURCES["genomes"][genome]["delly"]),
         },
         "hotspot_vcf": str(request_files["hotspot_vcf"]),
         "facets_snps": {
             "class": "File",
-            "location": str(genomic_resources["genomes"][genome]["facets_snps"]),
+            "location": str(GENOMIC_RESOURCES["genomes"][genome]["facets_snps"]),
         },
         "custom_enst": str(request_files["custom_enst"]),
         "vep_path": str(request_files["vep_path"]),
@@ -1036,7 +1114,7 @@ def convert_references(project_id, assay, pi, pi_email):
         "abra_scratch": temp_dir,
         "abra_ram_min": 84000,
         "genome": genome,
-        "intervals": genomic_resources["genomes"][genome]["intervals"],
+        "intervals": GENOMIC_RESOURCES["genomes"][genome]["intervals"],
         "mutect_dcov": 50000,
         "mutect_rf": rf,
         "num_cpu_threads_per_data_thread": 6,
@@ -1061,17 +1139,9 @@ def convert_references(project_id, assay, pi, pi_email):
     return out_dict
 
 
-def load_references():
-    WORKDIR = os.path.dirname(os.path.abspath(__file__))
-    d = json.load(
-        open(os.path.join(WORKDIR, "reference_jsons/genomic_resources.json"), "rb")
-    )
-    return d
-
-
-def get_baits_and_targets(assay, genomic_resources):
+def get_baits_and_targets(assay):
     # probably need similar rules for whatever "Exome" string is in rquest
-    targets = genomic_resources["targets"]
+    targets = GENOMIC_RESOURCES["targets"]
 
     target_assay = assay
 
@@ -1160,3 +1230,65 @@ def get_complex_tn(assay):
     if assay.find("IMPACT") > -1 or assay.find("HemePACT") > -1:
         return 0.5
     return 0.2
+
+
+def init_metadata():
+    """
+    Build a fastq dictionary containing expected metadata for a sample
+
+    This just instantiates it.
+    """
+    metadata = dict()
+    metadata[os.environ.get("REQUEST_ID_METADATA_KEY")] = ""
+    metadata[os.environ.get("SAMPLE_ID_METADATA_KEY")] = ""
+    metadata[os.environ.get("LIBRARY_ID_METADATA_KEY")] = ""
+    metadata["baitSet"] = ""
+    metadata["tumorOrNormal"] = ""
+    metadata[os.environ.get("SAMPLE_CLASS_METADATA_KEY")] = ""
+    metadata["species"] = ""
+    metadata[os.environ.get("CMO_SAMPLE_NAME_METADATA_KEY")] = ""
+    metadata["flowCellId"] = ""
+    metadata["barcodeIndex"] = ""
+    metadata[os.environ.get("PATIENT_ID_METADATA_KEY")] = ""
+    metadata["runDate"] = ""
+    metadata["R"] = ""
+    metadata["labHeadName"] = ""
+    metadata["labHeadEmail"] = ""
+    metadata["runId"] = ""
+    metadata["preservation"] = ""
+    return metadata
+
+
+def build_pooled_normal_sample_by_file(
+    pooled_normal, run_ids, preservation_types, bait_set, sample_name
+):
+    specimen_type = "Pooled Normal"
+    sample = dict()
+    sample["id"] = pooled_normal["id"]
+    sample["path"] = pooled_normal["path"]
+    sample["file_name"] = pooled_normal["file_name"]
+    metadata = init_metadata()
+    metadata[os.environ.get("SAMPLE_ID_METADATA_KEY")] = sample_name
+    metadata[os.environ.get("CMO_SAMPLE_NAME_METADATA_KEY")] = sample_name
+    metadata[os.environ.get("CMO_SAMPLE_TAG_METADATA_KEY")] = sample_name
+    metadata[os.environ.get("REQUEST_ID_METADATA_KEY")] = sample_name
+    metadata["sequencingCenter"] = "MSKCC"
+    metadata["platform"] = "Illumina"
+    metadata["baitSet"] = bait_set
+    metadata[os.environ.get("RECIPE_METADATA_KEY")] = bait_set
+    metadata["runId"] = run_ids
+    metadata["preservation"] = preservation_types
+    metadata[os.environ.get("LIBRARY_ID_METADATA_KEY")] = sample_name + "_1"
+    # because rgid depends on flowCellId and barcodeIndex, we will
+    # spoof barcodeIndex so that pairing can work properly; see
+    # build_sample in runner.operator.argos_operator.bin
+    metadata["R"] = get_r_orientation(pooled_normal["file_name"])
+    metadata["barcodeIndex"] = spoof_barcode(sample["file_name"], metadata["R"])
+    metadata["flowCellId"] = "PN_FCID"
+    metadata["tumorOrNormal"] = "Normal"
+    metadata[os.environ.get("PATIENT_ID_METADATA_KEY")] = "PN_PATIENT_ID"
+    metadata[os.environ.get("SAMPLE_CLASS_METADATA_KEY")] = specimen_type
+    metadata["runMode"] = ""
+    metadata[os.environ.get("CMO_SAMPLE_CLASS_METADATA_KEY")] = ""
+    sample["metadata"] = metadata
+    return sample
